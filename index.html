@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jelly Bean Carnival</title>
+    <!-- Tailwind CSS for modern UI styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts for playful typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Quicksand', sans-serif;
+            overflow: hidden;
+            touch-action: none;
+            background: linear-gradient(135deg, #fbcfe8 0%, #e0e7ff 50%, #ccfbf1 100%);
+        }
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+        /* Custom smooth glassmorphism UI */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.65);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+        }
+    </style>
+</head>
+<body class="w-screen h-screen flex flex-col justify-between select-none">
+
+    <!-- Top Header / Score Board -->
+    <header class="absolute top-4 left-4 right-4 z-10 flex flex-wrap gap-2 justify-between items-center pointer-events-none">
+        <div class="glass-panel px-5 py-3 rounded-2xl shadow-lg pointer-events-auto flex items-center space-x-4">
+            <div>
+                <div class="flex items-center space-x-2">
+                    <h1 class="text-xl font-bold text-pink-600 tracking-wider">🌟 Jelly Carnival</h1>
+                    <span id="levelBadge" class="bg-pink-100 text-pink-600 text-xs font-extrabold px-2.5 py-0.5 rounded-full border border-pink-200">LV.1</span>
+                </div>
+                <p id="subInstruction" class="text-xs text-gray-600">Touch or drag to bounce the jelly beans!</p>
+            </div>
+        </div>
+
+        <div class="glass-panel px-6 py-3 rounded-2xl shadow-lg pointer-events-auto flex items-center space-x-6">
+            <div class="text-center">
+                <span class="block text-xs text-gray-500 font-semibold">Score</span>
+                <span id="scoreVal" class="text-2xl font-black text-indigo-600">0</span>
+            </div>
+            <div class="text-center border-l border-gray-300 pl-6">
+                <span class="block text-xs text-gray-500 font-semibold">Beans</span>
+                <span id="countVal" class="text-2xl font-black text-pink-500">0</span>
+            </div>
+            <button id="spawnBtn" class="bg-gradient-to-r from-pink-400 to-indigo-400 hover:from-pink-500 hover:to-indigo-500 text-white font-bold px-4 py-2 rounded-xl shadow-md transition transform active:scale-95">
+                + Add
+            </button>
+            <button id="resetBtn" class="bg-white/80 hover:bg-white text-gray-700 font-bold px-3 py-2 rounded-xl shadow-sm transition transform active:scale-95 text-sm">
+                Reset
+            </button>
+        </div>
+    </header>
+
+    <!-- Canvas for simulation -->
+    <main class="relative w-full h-full">
+        <canvas id="canvas" class="w-full h-full"></canvas>
+    </main>
+
+    <!-- Bottom Instruction Footer -->
+    <footer class="absolute bottom-3 left-0 right-0 text-center pointer-events-none z-10">
+        <p class="text-xs text-gray-500/80 bg-white/40 backdrop-blur-sm inline-block px-4 py-1.5 rounded-full shadow-sm">
+            💡 Tip: Similar-sized beans merge on collision! Grow huge to split! ✨
+        </p>
+    </footer>
+
+    <!-- Notification / Message popup -->
+    <div id="toast" class="fixed bottom-16 left-1/2 transform -translate-x-1/2 bg-indigo-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg opacity-0 transition-opacity duration-300 pointer-events-none z-30">
+        Message
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        // Resize handling
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        });
+
+        // Pastel color palette for jelly beans
+        const pastelColors = [
+            { main: '#ffb3ba', shadow: '#e0868f', highlight: '#ffe5e8', name: 'Pink' },
+            { main: '#ffdfba', shadow: '#e0b88d', highlight: '#fff4e5', name: 'Orange' },
+            { main: '#baffc9', shadow: '#8dc29a', highlight: '#eafbe9', name: 'Green' },
+            { main: '#bae1ff', shadow: '#8cb8e0', highlight: '#eaf4ff', name: 'Blue' },
+            { main: '#e8baff', shadow: '#b98ee0', highlight: '#f7eaff', name: 'Purple' }
+        ];
+
+        // Level 2+ zone definitions (Pink, Green, Purple, Blue, Orange)
+        const level2Zones = [
+            { name: 'Pink', bg: '#fce7f3', border: '#f9a8d4', targetColor: '#ffb3ba', label: '🌸 Pink' },
+            { name: 'Green', bg: '#dcfce7', border: '#86efac', targetColor: '#baffc9', label: '🍀 Green' },
+            { name: 'Purple', bg: '#f3e8ff', border: '#d8b4fe', targetColor: '#e8baff', label: '🍇 Purple' },
+            { name: 'Blue', bg: '#e0f2fe', border: '#7dd3fc', targetColor: '#bae1ff', label: '💧 Blue' },
+            { name: 'Orange', bg: '#ffedd5', border: '#fdba74', targetColor: '#ffdfba', label: '🍊 Orange' }
+        ];
+
+        let beans = [];
+        let particles = [];
+        let score = 0;
+        let level = 1;
+
+        // Cute Sound Synthesizer using Web Audio API
+        let audioCtx = null;
+        let lastBoingTime = 0;
+
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // 壁やビーンズ同士が当たったときの小さな可愛い「ポヨン」音
+        function playBoingSound(intensity = 1) {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            if (now - lastBoingTime < 0.045) return;
+            lastBoingTime = now;
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            const baseFreq = 320 + Math.random() * 90;
+            osc.frequency.setValueAtTime(baseFreq * 0.78, now);
+            osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.38, now + 0.065);
+            osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.95, now + 0.14);
+
+            const vol = Math.min(0.065, Math.max(0.012, intensity * 0.035));
+            gain.gain.setValueAtTime(0.001, now);
+            gain.gain.linearRampToValueAtTime(vol, now + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.start(now);
+            osc.stop(now + 0.16);
+        }
+
+        // 破裂・変身するときの可愛い「ポンっ」音
+        function playPopSound() {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            const startFreq = 440 + Math.random() * 60;
+            osc.frequency.setValueAtTime(startFreq, now);
+            osc.frequency.exponentialRampToValueAtTime(startFreq * 2.1, now + 0.085);
+
+            gain.gain.setValueAtTime(0.14, now);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.start(now);
+            osc.stop(now + 0.1);
+        }
+
+        // レベルアップ到達時の可愛いファンファーレ音
+        function playFanfareSound() {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            const notes = [523.25, 659.25, 783.99, 1046.50];
+            notes.forEach((freq, idx) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                const startTime = now + idx * 0.11;
+                const duration = idx === notes.length - 1 ? 0.55 : 0.16;
+
+                osc.frequency.setValueAtTime(freq, startTime);
+                gain.gain.setValueAtTime(0.001, startTime);
+                gain.gain.linearRampToValueAtTime(0.16, startTime + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(startTime);
+                osc.stop(startTime + duration + 0.02);
+            });
+        }
+
+        // Helper: 16進数カラーをRGBに分解
+        function hexToRgb(hex) {
+            const clean = hex.replace('#', '');
+            return {
+                r: parseInt(clean.substring(0, 2), 16),
+                g: parseInt(clean.substring(2, 4), 16),
+                b: parseInt(clean.substring(4, 6), 16)
+            };
+        }
+
+        // Helper: 2つの色の中間色を生成
+        function blendColors(c1, c2) {
+            const blendHex = (h1, h2) => {
+                const rgb1 = hexToRgb(h1);
+                const rgb2 = hexToRgb(h2);
+                const r = Math.round((rgb1.r + rgb2.r) / 2).toString(16).padStart(2, '0');
+                const g = Math.round((rgb1.g + rgb2.g) / 2).toString(16).padStart(2, '0');
+                const b = Math.round((rgb1.b + rgb2.b) / 2).toString(16).padStart(2, '0');
+                return `#${r}${g}${b}`;
+            };
+            return {
+                main: blendHex(c1.main, c2.main),
+                shadow: blendHex(c1.shadow, c2.shadow),
+                highlight: blendHex(c1.highlight, c2.highlight),
+                name: 'Mixed'
+            };
+        }
+
+        // Helper: 2つのHEX色の距離（近さ）を計算
+        function colorDistance(hex1, hex2) {
+            const c1 = hexToRgb(hex1);
+            const c2 = hexToRgb(hex2);
+            return Math.hypot(c1.r - c2.r, c1.g - c2.g, c1.b - c2.b);
+        }
+
+        // Sparkle particle class for visual feedback
+        class Sparkle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color || '#ffffff';
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 1.5;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.size = Math.random() * 4 + 2;
+                this.alpha = 1;
+                this.decay = Math.random() * 0.03 + 0.02;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= 0.95;
+                this.vy *= 0.95;
+                this.alpha -= this.decay;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function createSparks(x, y, color, count = 10) {
+            for (let i = 0; i < count; i++) {
+                particles.push(new Sparkle(x, y, color));
+            }
+        }
+
+        // JellyBean Class
+        class JellyBean {
+            constructor(x, y, radius, colorObj) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius || Math.random() * 12 + 16; // 16 ~ 28
+                this.colorObj = colorObj || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+                this.isHeart = false;
+                this.isOrangeSlice = false;
+                this.isMelon = false;
+
+                // Floating physics velocities
+                this.vx = (Math.random() - 0.5) * 3;
+                this.vy = (Math.random() - 0.5) * 3;
+                this.angle = Math.random() * Math.PI * 2;
+                this.vAngle = (Math.random() - 0.5) * 0.04;
+
+                // Jelly squash & stretch deformation
+                this.squashX = 1;
+                this.squashY = 1;
+            }
+
+            update() {
+                // Zero-gravity gentle floating throughout the screen
+                this.vx *= 0.996;
+                this.vy *= 0.996;
+
+                // Keep a soft minimum drift so beans always float pleasantly
+                const speed = Math.hypot(this.vx, this.vy);
+                if (speed < 0.7) {
+                    const driftAngle = this.angle + (Math.random() - 0.5) * 0.2;
+                    this.vx += Math.cos(driftAngle) * 0.03;
+                    this.vy += Math.sin(driftAngle) * 0.03;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += this.vAngle;
+
+                // Recover squash & stretch smoothly
+                this.squashX += (1 - this.squashX) * 0.14;
+                this.squashY += (1 - this.squashY) * 0.14;
+
+                // Wall bounces
+                const margin = this.radius;
+                if (this.x < margin) {
+                    this.x = margin;
+                    if (Math.abs(this.vx) > 1.2) playBoingSound(Math.abs(this.vx) / 8);
+                    this.vx = Math.abs(this.vx) * 0.92;
+                    this.squashX = 0.78;
+                    this.squashY = 1.25;
+                } else if (this.x > width - margin) {
+                    this.x = width - margin;
+                    if (Math.abs(this.vx) > 1.2) playBoingSound(Math.abs(this.vx) / 8);
+                    this.vx = -Math.abs(this.vx) * 0.92;
+                    this.squashX = 0.78;
+                    this.squashY = 1.25;
+                }
+
+                if (this.y < margin) {
+                    this.y = margin;
+                    if (Math.abs(this.vy) > 1.2) playBoingSound(Math.abs(this.vy) / 8);
+                    this.vy = Math.abs(this.vy) * 0.92;
+                    this.squashX = 1.25;
+                    this.squashY = 0.78;
+                } else if (this.y > height - margin) {
+                    this.y = height - margin;
+                    if (Math.abs(this.vy) > 1.2) playBoingSound(Math.abs(this.vy) / 8);
+                    this.vy = -Math.abs(this.vy) * 0.92;
+                    this.squashX = 1.25;
+                    this.squashY = 0.78;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.scale(this.squashX, this.squashY);
+
+                let r = this.radius;
+
+                if (this.isMelon) {
+                    // Draw cute Melon (直径10cmの網目メロン)
+                    const melonGrad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r);
+                    melonGrad.addColorStop(0, '#d9f99d');
+                    melonGrad.addColorStop(0.55, '#86efac');
+                    melonGrad.addColorStop(1, '#22c55e');
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r, 0, Math.PI * 2);
+                    ctx.fillStyle = melonGrad;
+                    ctx.fill();
+
+                    // メロンの可愛い網目模様（クリッピングして描画）
+                    ctx.save();
+                    ctx.clip();
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+                    ctx.lineWidth = Math.max(2.5, r * 0.032);
+                    const step = r * 0.36;
+                    for (let offset = -r * 2; offset <= r * 2; offset += step) {
+                        ctx.beginPath();
+                        ctx.moveTo(offset - r, -r);
+                        ctx.lineTo(offset + r, r);
+                        ctx.stroke();
+
+                        ctx.beginPath();
+                        ctx.moveTo(offset + r, -r);
+                        ctx.lineTo(offset - r, r);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+
+                    // 外枠の柔らかい縁取り
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#4ade80';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+
+                    // T字型の可愛いメロンのヘタ（ツル）
+                    ctx.strokeStyle = '#65a30d';
+                    ctx.lineCap = 'round';
+                    ctx.lineWidth = Math.max(4, r * 0.065);
+                    ctx.beginPath();
+                    ctx.moveTo(0, -r * 0.96);
+                    ctx.lineTo(0, -r * 1.16);
+                    ctx.moveTo(-r * 0.22, -r * 1.16);
+                    ctx.quadraticCurveTo(0, -r * 1.22, r * 0.22, -r * 1.14);
+                    ctx.stroke();
+
+                    // ツヤ感ハイライト
+                    ctx.beginPath();
+                    ctx.ellipse(-r * 0.35, -r * 0.35, r * 0.32, r * 0.15, -0.45, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.fill();
+                } else if (this.isOrangeSlice) {
+                    // Draw cute Orange Slice (輪切りオレンジ)
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r, 0, Math.PI * 2);
+                    ctx.fillStyle = '#fb923c';
+                    ctx.fill();
+
+                    // 内側の白いアルベド層
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r * 0.87, 0, Math.PI * 2);
+                    ctx.fillStyle = '#fff7ed';
+                    ctx.fill();
+
+                    // オレンジ果肉の房（8房）
+                    const segments = 8;
+                    for (let s = 0; s < segments; s++) {
+                        const startA = (s * Math.PI * 2) / segments + 0.06;
+                        const endA = ((s + 1) * Math.PI * 2) / segments - 0.06;
+                        ctx.beginPath();
+                        ctx.moveTo(0, 0);
+                        ctx.arc(0, 0, r * 0.78, startA, endA);
+                        ctx.closePath();
+                        ctx.fillStyle = '#fdba74';
+                        ctx.fill();
+                    }
+
+                    // 中心の白い芯
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r * 0.14, 0, Math.PI * 2);
+                    ctx.fillStyle = '#fff7ed';
+                    ctx.fill();
+
+                    // ツヤ感ハイライト
+                    ctx.beginPath();
+                    ctx.ellipse(-r * 0.3, -r * 0.3, r * 0.3, r * 0.14, -0.45, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+                    ctx.fill();
+                } else if (this.isHeart) {
+                    // Draw cute Heart shape (Level 2 transformation)
+                    const hr = r * 1.15;
+                    ctx.beginPath();
+                    ctx.moveTo(0, hr * 0.75);
+                    ctx.bezierCurveTo(-hr * 1.25, hr * 0.1, -hr * 1.25, -hr * 0.85, 0, -hr * 0.35);
+                    ctx.bezierCurveTo(hr * 1.25, -hr * 0.85, hr * 1.25, hr * 0.1, 0, hr * 0.75);
+                    ctx.closePath();
+
+                    const grad = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, hr * 1.2);
+                    grad.addColorStop(0, this.colorObj.highlight);
+                    grad.addColorStop(0.55, this.colorObj.main);
+                    grad.addColorStop(1, this.colorObj.shadow);
+                    ctx.fillStyle = grad;
+                    ctx.fill();
+
+                    // Cute gloss highlight on heart
+                    ctx.beginPath();
+                    ctx.ellipse(-r * 0.38, -r * 0.25, r * 0.25, r * 0.12, -0.5, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+                    ctx.fill();
+                } else {
+                    // Draw Jelly Bean capsule shape
+                    const w = r * 1.3;
+                    const h = r * 0.88;
+                    ctx.beginPath();
+                    ctx.moveTo(-w * 0.45, -h);
+                    ctx.bezierCurveTo(w * 0.45, -h * 1.05, w * 1.15, -h * 0.7, w * 1.15, 0);
+                    ctx.bezierCurveTo(w * 1.15, h * 0.7, w * 0.45, h * 1.05, -w * 0.45, h);
+                    ctx.bezierCurveTo(-w * 1.15, h * 0.85, -w * 1.15, -h * 0.85, -w * 0.45, -h);
+                    ctx.closePath();
+
+                    const grad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r * 1.4);
+                    grad.addColorStop(0, this.colorObj.highlight);
+                    grad.addColorStop(0.5, this.colorObj.main);
+                    grad.addColorStop(1, this.colorObj.shadow);
+                    ctx.fillStyle = grad;
+                    ctx.fill();
+
+                    // Glossy jelly reflection
+                    ctx.beginPath();
+                    ctx.ellipse(-r * 0.28, -r * 0.36, r * 0.42, r * 0.15, -0.25, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // Collision, Merging & Giant Split Physics
+        function handleCollisions() {
+            for (let i = 0; i < beans.length; i++) {
+                for (let j = i + 1; j < beans.length; j++) {
+                    const b1 = beans[i];
+                    const b2 = beans[j];
+                    if (!b1 || !b2) continue;
+
+                    const dx = b2.x - b1.x;
+                    const dy = b2.y - b1.y;
+                    const dist = Math.hypot(dx, dy);
+                    const minDist = b1.radius + b2.radius;
+
+                    if (dist < minDist) {
+                        // Level 4: オレンジの輪切り同士が融合したら直径10cm（半径95px）のメロンに変身！
+                        if (level >= 4 && b1.isOrangeSlice && b2.isOrangeSlice) {
+                            b1.isOrangeSlice = false;
+                            b1.isHeart = false;
+                            b1.isMelon = true;
+                            b1.radius = 95; // 直径190px（約10cm相当）
+                            b1.vx = (b1.vx + b2.vx) / 2;
+                            b1.vy = (b1.vy + b2.vy) / 2;
+                            b1.squashX = 1.35;
+                            b1.squashY = 1.35;
+
+                            playPopSound();
+                            createSparks((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, '#86efac', 16);
+                            createSparks((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, '#ffffff', 12);
+                            score += 1000;
+
+                            beans.splice(j, 1);
+                            showToast("🍈 10cmのメロンが誕生！ +1000");
+                            return;
+                        }
+
+                        // Fusion Mechanic: Similar-sized beans merge into a bigger one with blended color
+                        const maxMergeRadius = level >= 3 ? 52 : 38;
+                        if (!b1.isMelon && !b2.isMelon && !b1.isOrangeSlice && !b2.isOrangeSlice &&
+                            Math.abs(b1.radius - b2.radius) < 6 && b1.radius < maxMergeRadius) {
+                            const capRadius = level >= 3 ? 60 : 45;
+                            b1.radius = Math.min(capRadius, Math.hypot(b1.radius, b2.radius) * 0.92);
+                            b1.colorObj = blendColors(b1.colorObj, b2.colorObj);
+                            b1.vx = (b1.vx + b2.vx) / 2;
+                            b1.vy = (b1.vy + b2.vy) / 2;
+                            b1.squashX = 1.32;
+                            b1.squashY = 0.74;
+
+                            playBoingSound(1.1);
+                            createSparks((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, b1.colorObj.main, 8);
+                            score += 50;
+
+                            beans.splice(j, 1);
+                            return;
+                        }
+
+                        // Elastic bounce separation
+                        const angle = Math.atan2(dy, dx);
+                        const overlap = minDist - dist;
+                        const totalMass = b1.radius + b2.radius;
+                        const ratio1 = b2.radius / totalMass;
+                        const ratio2 = b1.radius / totalMass;
+
+                        b1.x -= Math.cos(angle) * overlap * ratio1;
+                        b1.y -= Math.sin(angle) * overlap * ratio1;
+                        b2.x += Math.cos(angle) * overlap * ratio2;
+                        b2.y += Math.sin(angle) * overlap * ratio2;
+
+                        const nx = Math.cos(angle);
+                        const ny = Math.sin(angle);
+                        const rvx = b2.vx - b1.vx;
+                        const rvy = b2.vy - b1.vy;
+                        const velAlongNormal = rvx * nx + rvy * ny;
+
+                        if (velAlongNormal < 0) {
+                            const restitution = 0.85;
+                            const impulse = -(1 + restitution) * velAlongNormal / (1 / b1.radius + 1 / b2.radius);
+                            const impulseX = impulse * nx;
+                            const impulseY = impulse * ny;
+
+                            b1.vx -= impulseX / b1.radius;
+                            b1.vy -= impulseY / b1.radius;
+                            b2.vx += impulseX / b2.radius;
+                            b2.vy += impulseY / b2.radius;
+
+                            b1.squashX = 0.85;
+                            b1.squashY = 1.18;
+                            b2.squashX = 0.85;
+                            b2.squashY = 1.18;
+
+                            if (Math.abs(velAlongNormal) > 1.4) {
+                                playBoingSound(Math.abs(velAlongNormal) / 7);
+                            }
+                        }
+                    }
+                }
+
+                // Giant bean transformation or split mechanic
+                if (level >= 3 && beans[i] && !beans[i].isOrangeSlice && !beans[i].isMelon && beans[i].radius >= 48) {
+                    let big = beans[i];
+                    big.isOrangeSlice = true;
+                    big.isHeart = false;
+                    big.squashX = 1.4;
+                    big.squashY = 1.4;
+                    playPopSound();
+                    createSparks(big.x, big.y, '#fb923c', 14);
+                    createSparks(big.x, big.y, '#ffffff', 10);
+                    score += 300;
+                    showToast("🍊 5cm達成！オレンジの輪切りに変身！ +300");
+                } else if (beans[i] && !beans[i].isOrangeSlice && !beans[i].isMelon && beans[i].radius >= (level >= 3 ? 58 : 42)) {
+                    let big = beans[i];
+                    playPopSound();
+                    createSparks(big.x, big.y, big.colorObj.main, 12);
+                    score += 100;
+
+                    // Split into 2 smaller beans
+                    const newR = big.radius * 0.62;
+                    beans.splice(i, 1);
+                    if (beans.length < 55) {
+                        const bA = new JellyBean(big.x - 15, big.y, newR, big.colorObj);
+                        const bB = new JellyBean(big.x + 15, big.y, newR, big.colorObj);
+                        bA.vx = -3 - Math.random() * 2;
+                        bA.vy = -3 - Math.random() * 2;
+                        bB.vx = 3 + Math.random() * 2;
+                        bB.vy = -3 - Math.random() * 2;
+                        beans.push(bA, bB);
+                    }
+                }
+            }
+        }
+
+        // Level progression & zone checks
+        function updateLevelLogic() {
+            if (level === 1 && score >= 7000) {
+                level = 2;
+                playFanfareSound();
+                const badge = document.getElementById('levelBadge');
+                badge.innerText = 'LV.2 ✨';
+                badge.className = 'bg-gradient-to-r from-pink-400 to-purple-500 text-white text-xs font-extrabold px-2.5 py-0.5 rounded-full shadow-sm';
+                document.getElementById('subInstruction').innerText = 'Match bean colors with background zones to turn them into hearts! 💖';
+                showToast("🎉 LEVEL 2! Match bean colors to zones for Hearts! 💖");
+            }
+
+            if (level === 2 && score >= 16000) {
+                level = 3;
+                playFanfareSound();
+                const badge = document.getElementById('levelBadge');
+                badge.innerText = 'LV.3 🍊';
+                badge.className = 'bg-gradient-to-r from-orange-400 to-amber-500 text-white text-xs font-extrabold px-2.5 py-0.5 rounded-full shadow-sm';
+                document.getElementById('subInstruction').innerText = 'Grow beans to 5cm+ to turn them into juicy orange slices! 🍊';
+                showToast("🎉 LEVEL 3! Grow beans to 5cm+ for Orange Slices! 🍊");
+            }
+
+            if (level === 3 && score >= 30000) {
+                level = 4;
+                playFanfareSound();
+                const badge = document.getElementById('levelBadge');
+                badge.innerText = 'LV.4 🍈';
+                badge.className = 'bg-gradient-to-r from-emerald-400 to-lime-500 text-white text-xs font-extrabold px-2.5 py-0.5 rounded-full shadow-sm';
+                document.getElementById('subInstruction').innerText = 'Merge two orange slices together to create a giant 10cm Melon! 🍈';
+                showToast("🎉 LEVEL 4! Merge two Orange Slices into a 10cm Melon! 🍈");
+            }
+
+            // 画面がメロンだらけになったか判定（メロンの合計面積が画面の55%以上、または6個以上）
+            if (level >= 4) {
+                const melons = beans.filter(b => b.isMelon);
+                const melonArea = melons.reduce((sum, m) => sum + Math.PI * m.radius * m.radius, 0);
+                const screenArea = width * height;
+                if (melons.length >= 6 || (melons.length >= 2 && melonArea >= screenArea * 0.55)) {
+                    // すべての要素を豪快に破裂させる
+                    beans.forEach(b => {
+                        const sparkColor = b.isMelon ? '#86efac' : (b.isOrangeSlice ? '#fb923c' : b.colorObj.main);
+                        createSparks(b.x, b.y, sparkColor, 16);
+                        createSparks(b.x, b.y, '#ffffff', 8);
+                    });
+                    playPopSound();
+                    setTimeout(() => playPopSound(), 90);
+                    setTimeout(() => playFanfareSound(), 180);
+
+                    // レベル1から再スタート
+                    beans = [];
+                    score = 0;
+                    level = 1;
+                    const badge = document.getElementById('levelBadge');
+                    badge.innerText = 'LV.1';
+                    badge.className = 'bg-pink-100 text-pink-600 text-xs font-extrabold px-2.5 py-0.5 rounded-full border border-pink-200';
+                    document.getElementById('subInstruction').innerText = 'Touch or drag to bounce the jelly beans!';
+                    initBeans();
+                    showToast("🍈💥 メロンが画面いっぱいで大爆発！レベル1から再スタート！ 🎉");
+                    return;
+                }
+            }
+
+            if (level >= 2) {
+                const zoneWidth = width / level2Zones.length;
+                beans.forEach(b => {
+                    if (!b.isHeart && !b.isOrangeSlice && !b.isMelon) {
+                        const zoneIdx = Math.min(level2Zones.length - 1, Math.max(0, Math.floor(b.x / zoneWidth)));
+                        const zone = level2Zones[zoneIdx];
+                        if (colorDistance(b.colorObj.main, zone.targetColor) < 55) {
+                            b.isHeart = true;
+                            b.squashX = 1.45;
+                            b.squashY = 1.45;
+                            playPopSound();
+                            createSparks(b.x, b.y, zone.targetColor, 10);
+                            createSparks(b.x, b.y, '#ffffff', 8);
+                            score += 150;
+                            showToast(`💖 ${zone.name}エリアでハートに変身！ +150`);
+                        }
+                    }
+                });
+            }
+        }
+
+        // Draw Level 2+ colorful background zones
+        function drawBackgroundZones() {
+            if (level < 2) return;
+            const zoneWidth = width / level2Zones.length;
+            level2Zones.forEach((zone, idx) => {
+                const x = idx * zoneWidth;
+                ctx.fillStyle = zone.bg;
+                ctx.globalAlpha = 0.55;
+                ctx.fillRect(x, 0, zoneWidth, height);
+
+                // Subtle divider line
+                if (idx > 0) {
+                    ctx.strokeStyle = zone.border;
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([8, 8]);
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+
+                // Zone label near bottom
+                ctx.globalAlpha = 0.7;
+                ctx.fillStyle = '#4b5563';
+                ctx.font = 'bold 14px Quicksand, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(zone.label, x + zoneWidth / 2, height - 55);
+            });
+            ctx.globalAlpha = 1.0;
+        }
+
+        // Toast helper
+        let toastTimer = null;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.remove('opacity-0');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.add('opacity-0');
+            }, 2200);
+        }
+
+        // Interaction & Pointer Handling
+        let pointer = { x: -1000, y: -1000, isDown: false, prevX: 0, prevY: 0 };
+
+        function handlePointerDown(x, y) {
+            initAudio();
+            pointer.x = x;
+            pointer.y = y;
+            pointer.prevX = x;
+            pointer.prevY = y;
+            pointer.isDown = true;
+
+            // Repel/Bounce nearby beans on tap
+            let hitAny = false;
+            beans.forEach(b => {
+                const dx = b.x - x;
+                const dy = b.y - y;
+                const dist = Math.hypot(dx, dy);
+                if (dist < b.radius + 70) {
+                    const force = (1 - dist / (b.radius + 70)) * 12 + 3;
+                    const angle = Math.atan2(dy, dx);
+                    b.vx += Math.cos(angle) * force;
+                    b.vy += Math.sin(angle) * force - 2;
+                    b.squashX = 1.3;
+                    b.squashY = 0.75;
+                    hitAny = true;
+                    score += 10;
+                }
+            });
+
+            if (hitAny) {
+                playBoingSound(0.9);
+                createSparks(x, y, '#ffffff', 8);
+            } else {
+                // Spawn a new bean where clicked if empty space
+                if (beans.length < 45) {
+                    beans.push(new JellyBean(x, y));
+                    playPopSound();
+                }
+            }
+        }
+
+        function handlePointerMove(x, y) {
+            if (!pointer.isDown) return;
+            const vx = (x - pointer.prevX) * 0.35;
+            const vy = (y - pointer.prevY) * 0.35;
+
+            beans.forEach(b => {
+                const dist = Math.hypot(b.x - x, b.y - y);
+                if (dist < b.radius + 45) {
+                    b.vx += vx;
+                    b.vy += vy;
+                }
+            });
+
+            pointer.prevX = x;
+            pointer.prevY = y;
+            pointer.x = x;
+            pointer.y = y;
+        }
+
+        canvas.addEventListener('mousedown', e => handlePointerDown(e.clientX, e.clientY));
+        window.addEventListener('mousemove', e => handlePointerMove(e.clientX, e.clientY));
+        window.addEventListener('mouseup', () => { pointer.isDown = false; });
+
+        canvas.addEventListener('touchstart', e => {
+            if (e.touches.length > 0) {
+                handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', e => {
+            if (e.touches.length > 0) {
+                handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', () => { pointer.isDown = false; });
+
+        // UI Controls
+        document.getElementById('spawnBtn').addEventListener('click', () => {
+            initAudio();
+            for (let i = 0; i < 5; i++) {
+                if (beans.length < 55) {
+                    beans.push(new JellyBean(
+                        width * 0.2 + Math.random() * width * 0.6,
+                        height * 0.2 + Math.random() * height * 0.4
+                    ));
+                }
+            }
+            playPopSound();
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            initAudio();
+            beans = [];
+            particles = [];
+            score = 0;
+            level = 1;
+            const badge = document.getElementById('levelBadge');
+            badge.innerText = 'LV.1';
+            badge.className = 'bg-pink-100 text-pink-600 text-xs font-extrabold px-2.5 py-0.5 rounded-full border border-pink-200';
+            document.getElementById('subInstruction').innerText = 'Touch or drag to bounce the jelly beans!';
+            initBeans();
+            showToast("🔄 Reset to Level 1!");
+        });
+
+        // Initial population
+        function initBeans() {
+            for (let i = 0; i < 16; i++) {
+                beans.push(new JellyBean(
+                    Math.random() * (width - 100) + 50,
+                    Math.random() * (height - 150) + 80
+                ));
+            }
+        }
+
+        // Main Animation Loop
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            drawBackgroundZones();
+
+            handleCollisions();
+
+            // Update & draw beans
+            for (let i = 0; i < beans.length; i++) {
+                beans[i].update();
+                beans[i].draw();
+            }
+
+            // Update & draw sparkle particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw();
+                if (particles[i].alpha <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            updateLevelLogic();
+
+            document.getElementById('scoreVal').innerText = score;
+            document.getElementById('countVal').innerText = beans.length;
+
+            requestAnimationFrame(animate);
+        }
+
+        window.onload = function () {
+            initBeans();
+            animate();
+        };
+    </script>
+</body>
+</html>
